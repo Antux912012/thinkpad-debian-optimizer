@@ -53,3 +53,19 @@ sudo ./optimize_thinkpad.sh
 ```
 
 *(If run without `sudo`, the script automatically prompts for elevation via `sudo` or `pkexec`).*
+
+---
+
+## 🎙️ Microphone & Bluetooth Audio Fix (`optimize_audio.sh`)
+
+Fixes on the ThinkPad 13 (Realtek ALC298 + PipeWire/WirePlumber + EasyEffects):
+- **Internal mic clipping:** the stock gain was +60 dB (`Internal Mic Boost` 3 + `Capture` 100%), making ~16% of samples clip. The script sets the boost to 0, `Capture` to 65%, and the source volume to 0.60, which brings clipping down to about 0.2%.
+- **Default input** set to the built-in mic instead of the unstable Bluetooth HFP transport.
+- **Bluetooth headset** switched back to A2DP **SBC-XQ** (stops it getting stuck on 8 kHz CVSD).
+- Installs a systemd **user** service (`thinkpad-audio-optimize.service`) that re-applies these settings at login.
+
+```bash
+./optimize_audio.sh   # run as your normal user, NOT with sudo
+```
+
+EasyEffects input filters (Noise Reduction, Gate, Compressor) also work on Bluetooth headset mics. For the headset mic, use the mSBC profile (`headset-head-unit`) instead of CVSD.
