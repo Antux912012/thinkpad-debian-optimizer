@@ -6,20 +6,22 @@ An automated, idempotent system optimization and health check-up script for **De
 
 ## ✨ What This Script Optimizes
 
-### 1. System Check-Up & Essential Hardware Tools
-- Installs `thermald`, `zram-tools`, `nvme-cli`, `smartmontools`, `plymouth`, and `plymouth-themes`.
-- Audits NVMe SMART health (`nvme smart-log`), active swap/ZRAM devices, and kernel parameters.
+### 1. System Check-Up, Hardware Video Acceleration & Essential Tools
+- Installs `thermald`, `zram-tools`, `nvme-cli`, `smartmontools`, `plymouth`, `plymouth-themes`, `vainfo`, and `intel-media-va-driver-non-free` (enabling `contrib` and `non-free` repositories automatically if needed).
+- Enables full **Intel iHD VA-API (`iHD_drv_video.so`)** hardware video decoding and encoding on Intel HD Graphics 620 (H.264, HEVC 8/10-bit, VP8, VP9, MPEG2, JPEG).
+- Audits NVMe SMART health (`nvme smart-log`), active swap/ZRAM devices, THP state, and kernel parameters.
 
-### 2. Performance & Battery Life
-- **ZRAM Compressed Memory Swap (`/etc/default/zramswap`):** Configures `zstd`-compressed RAM swap (`25%` of RAM at priority `100`) so memory pressure is handled in fast RAM before touching the NVMe swap partition.
+### 2. Performance, Memory/ZRAM & Battery Life
+- **ZRAM Compressed Memory Swap & Zswap Conflict Prevention (`/etc/default/zramswap`):** Configures `zstd`-compressed RAM swap (`25%` of RAM at priority `100`) and disables kernel `zswap` (`zswap.enabled=0`) so pages are compressed directly into fast ZRAM without double-compression overhead.
+- **Transparent Hugepages (`/etc/tmpfiles.d/thp-madvise.conf`):** Sets THP `enabled` to `madvise` and `defrag` to `defer+madvise` to avoid memory bloat and compaction latency stalls.
 - **Intel GPU & Audio Power Saving (`/etc/modprobe.d/99-thinkpad-power.conf`):**
   - Enables Framebuffer Compression (`enable_fbc=1`) and flicker-free `fastboot=1` on Intel HD Graphics 620 (`i915`).
   - Enables 1-second idle power-save on Intel Sunrise Point-LP HD Audio (`snd_hda_intel power_save=1`).
 - **Thermal & Power Profiles:** Enables `thermald.service` (Intel Dynamic Platform and Thermal Framework) and `power-profiles-daemon.service`.
 - **CPU & VM Tuning (`/etc/sysctl.d/99-thinkpad-performance-nvme-net.conf`):**
   - Disables NMI watchdog interrupts (`kernel.nmi_watchdog = 0`).
-  - Tunes `vm.swappiness = 10` and `vm.vfs_cache_pressure = 50` for 16 GB RAM laptops.
-- **ThinkPad Battery Charge Thresholds (`thinkpad-battery-threshold.service`):** Sets battery charge thresholds (`75%`–`90%`) to prevent high-voltage Li-ion wear.
+  - Tunes `vm.swappiness = 100`, `vm.watermark_boost_factor = 0`, `vm.watermark_scale_factor = 125`, `vm.page-cluster = 0`, and `vm.vfs_cache_pressure = 50` specifically for 16 GB RAM + Zstd ZRAM laptops.
+- **ThinkPad Battery Charge Thresholds (`thinkpad-battery-threshold.service`):** Sets battery charge thresholds (`75%`–`90%`, lowering `start` before raising `end` to satisfy ThinkPad EC ordering constraints) to prevent high-voltage Li-ion wear.
 
 ### 3. NVMe / SSD Lifespan Protection
 - **`/etc/fstab` Mount Tuning:** Automatically adds `noatime,commit=60` to the root `ext4` filesystem and remounts `/` live, eliminating read-access timestamp writes and batching journal commits to 60s intervals.
@@ -34,11 +36,12 @@ An automated, idempotent system optimization and health check-up script for **De
 - **NetworkManager Wi-Fi Power-Save Override (`/etc/NetworkManager/conf.d/99-wifi-powersave-off.conf`):** Sets `wifi.powersave = 2` (disabled).
 - **TCP BBR Congestion Control & Fair Queueing:** Enables `tcp_bbr` (`net.ipv4.tcp_congestion_control = bbr`, `net.core.default_qdisc = fq`), `tcp_fastopen = 3`, `tcp_mtu_probing = 1`, and 16 MB socket buffers.
 
-### 5. Plymouth Boot Splash & 1080p Flicker-Free GRUB
+### 5. Plymouth Boot Splash, Fast Boot & 1080p Flicker-Free GRUB
+- Disables `NetworkManager-wait-online.service` to eliminate ~5.5 seconds of userspace boot stall.
 - Configures `/etc/default/grub` with:
   - `GRUB_TIMEOUT=2`
   - `GRUB_GFXMODE=1920x1080x32,1920x1080,auto` and `GRUB_GFXPAYLOAD_LINUX=keep` for native 1080p flicker-free handoff.
-  - `GRUB_CMDLINE_LINUX_DEFAULT="quiet splash i915.enable_fbc=1 i915.fastboot=1 nmi_watchdog=0 nvme_core.default_ps_max_latency_us=5500"`
+  - `GRUB_CMDLINE_LINUX_DEFAULT="quiet splash i915.enable_fbc=1 i915.fastboot=1 nmi_watchdog=0 nvme_core.default_ps_max_latency_us=5500 zswap.enabled=0"`
 - Configures Plymouth boot splash theme (`bgrt` / `ceratopsian`) and updates initramfs (`update-initramfs -u -k all`) and GRUB (`update-grub`).
 
 ---

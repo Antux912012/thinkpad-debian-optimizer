@@ -26,9 +26,14 @@ echo "=================================================================="
 
 export DEBIAN_FRONTEND=noninteractive
 
-echo "=== [1/6] Installing System Optimization, NVMe, Thermal & Plymouth Packages ==="
+echo "=== [1/6] Installing System Optimization, NVMe, VA-API, Thermal & Plymouth Packages ==="
+# Enable contrib and non-free components if using modern deb822 debian.sources so intel-media-va-driver-non-free is available
+if [ -f /etc/apt/sources.list.d/debian.sources ] && ! grep -q "non-free$" /etc/apt/sources.list.d/debian.sources; then
+    sed -i 's/Components: main non-free-firmware/Components: main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources || true
+fi
 apt-get update -qq
-apt-get install -y -qq thermald zram-tools nvme-cli smartmontools plymouth plymouth-themes
+apt-get install -y -qq thermald zram-tools nvme-cli smartmontools plymouth plymouth-themes vainfo libva-drm2 libva-x11-2
+apt-get install -y -qq intel-media-va-driver-non-free || apt-get install -y -qq intel-media-va-driver || true
 
 echo "=== [2/6] Optimizing NVMe SSD Lifespan (/etc/fstab, Journald, Udev, Fstrim) ==="
 cp -a /etc/fstab "/etc/fstab.bak.$(date +%Y%m%d%H%M%S)"
@@ -64,7 +69,12 @@ udevadm control --reload-rules && udevadm trigger --subsystem-match=block || tru
 # Ensure weekly TRIM timer is enabled and active
 systemctl enable --now fstrim.timer
 
-echo "=== [3/6] Optimizing Performance, RAM/ZRAM & Battery Life ==="
+echo "=== [3/6] Optimizing Performance, RAM/ZRAM, THP & Battery Life ==="
+# Disable kernel zswap live so it does not conflict or double-compress pages before ZRAM
+if [ -w /sys/module/zswap/parameters/enabled ]; then
+    echo N > /sys/module/zswap/parameters/enabled 2>/dev/null || true
+fi
+
 # Configure zram-tools for fast zstd compressed RAM swap (reduces NVMe swap wear)
 if [ -f /etc/default/zramswap ]; then
     cp -a /etc/default/zramswap /etc/default/zramswap.bak || true
@@ -76,6 +86,14 @@ PRIORITY=100
 EOF
 systemctl enable zramswap.service || true
 systemctl restart zramswap.service || true
+
+# Configure Transparent Hugepages (THP) to madvise to prevent desktop latency/compaction stalls
+cat << 'EOF' > /etc/tmpfiles.d/thp-madvise.conf
+# Set Transparent Hugepages to madvise to prevent desktop latency/memory bloat
+w /sys/kernel/mm/transparent_hugepage/enabled - - - - madvise
+w /sys/kernel/mm/transparent_hugepage/defrag - - - - defer+madvise
+EOF
+systemd-tmpfiles --create /etc/tmpfiles.d/thp-madvise.conf 2>/dev/null || true
 
 # Configure Intel HD Graphics 620 (i915) & Sunrise Point-LP HD Audio power saving
 cat << 'EOF' > /etc/modprobe.d/99-thinkpad-power.conf
@@ -97,6 +115,9 @@ systemctl enable --now power-profiles-daemon.service || true
 # Configure ThinkPad battery charge thresholds (75% start / 90% end) to protect Li-ion longevity
 for bat in /sys/class/power_supply/BAT*; do
     if [ -f "$bat/charge_control_end_threshold" ]; then
+        if [ -f "$bat/charge_control_start_threshold" ]; then
+            echo 50 > "$bat/charge_control_start_threshold" 2>/dev/null || true
+        fi
         echo 90 > "$bat/charge_control_end_threshold" 2>/dev/null || true
         if [ -f "$bat/charge_control_start_threshold" ]; then
             echo 75 > "$bat/charge_control_start_threshold" 2>/dev/null || true
@@ -111,7 +132,7 @@ After=multi-user.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'for bat in /sys/class/power_supply/BAT*; do [ -w "$bat/charge_control_end_threshold" ] && echo 90 > "$bat/charge_control_end_threshold" || true; [ -w "$bat/charge_control_start_threshold" ] && echo 75 > "$bat/charge_control_start_threshold" || true; done'
+ExecStart=/bin/sh -c 'for bat in /sys/class/power_supply/BAT*; do [ -w "$bat/charge_control_start_threshold" ] && echo 50 > "$bat/charge_control_start_threshold" || true; [ -w "$bat/charge_control_end_threshold" ] && echo 90 > "$bat/charge_control_end_threshold" || true; [ -w "$bat/charge_control_start_threshold" ] && echo 75 > "$bat/charge_control_start_threshold" || true; done'
 RemainAfterExit=yes
 
 [Install]
@@ -158,7 +179,9 @@ cat << 'EOF' > /etc/sysctl.d/99-thinkpad-performance-nvme-net.conf
 kernel.nmi_watchdog = 0
 
 # --- Memory & NVMe SSD Lifespan (16GB RAM + ZRAM) ---
-vm.swappiness = 10
+vm.swappiness = 100
+vm.watermark_boost_factor = 0
+vm.watermark_scale_factor = 125
 vm.vfs_cache_pressure = 50
 vm.dirty_background_ratio = 5
 vm.dirty_ratio = 15
@@ -179,7 +202,10 @@ net.core.netdev_max_backlog = 16384
 EOF
 sysctl --system >/dev/null
 
-echo "=== [5/6] Configuring Plymouth & Optimizing GRUB (1920x1080 Flicker-Free Boot) ==="
+echo "=== [5/6] Configuring Plymouth, Fast Boot & Optimizing GRUB (1920x1080 Flicker-Free Boot) ==="
+# Disable NetworkManager-wait-online.service to eliminate ~5.5s userspace boot stall
+systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
+
 if /usr/sbin/plymouth-set-default-theme -l | grep -qx "bgrt"; then
     /usr/sbin/plymouth-set-default-theme bgrt || true
 else
@@ -193,7 +219,7 @@ GRUB_DEFAULT=0
 GRUB_TIMEOUT=2
 GRUB_TIMEOUT_STYLE=menu
 GRUB_DISTRIBUTOR=`( . /etc/os-release && echo ${NAME} )`
-GRUB_CMDLINE_LINUX_DEFAULT="quiet splash i915.enable_fbc=1 i915.fastboot=1 nmi_watchdog=0 nvme_core.default_ps_max_latency_us=5500"
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash i915.enable_fbc=1 i915.fastboot=1 nmi_watchdog=0 nvme_core.default_ps_max_latency_us=5500 zswap.enabled=0"
 GRUB_CMDLINE_LINUX=""
 GRUB_GFXMODE=1920x1080x32,1920x1080,auto
 GRUB_GFXPAYLOAD_LINUX=keep
@@ -205,10 +231,13 @@ update-grub
 echo "=== [6/6] Post-Optimization System & NVMe Health Verification ==="
 echo "--- NVMe SMART Health Summary ---"
 nvme smart-log /dev/nvme0n1 | head -n 15 2>/dev/null || true
-echo "--- Active Swap & ZRAM ---"
+echo "--- Active Swap, ZRAM & Zswap ---"
 swapon --show || true
+echo -n "zswap enabled: " && cat /sys/module/zswap/parameters/enabled 2>/dev/null || true
 echo "--- Active Sysctl Values ---"
-sysctl kernel.nmi_watchdog vm.swappiness vm.vfs_cache_pressure vm.dirty_writeback_centisecs net.ipv4.tcp_congestion_control net.core.default_qdisc net.ipv4.tcp_fastopen
+sysctl kernel.nmi_watchdog vm.swappiness vm.watermark_boost_factor vm.watermark_scale_factor vm.vfs_cache_pressure vm.dirty_writeback_centisecs net.ipv4.tcp_congestion_control net.core.default_qdisc net.ipv4.tcp_fastopen
+echo "--- Transparent Hugepages (THP) ---"
+cat /sys/kernel/mm/transparent_hugepage/enabled /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true
 echo "--- Plymouth Default Theme ---"
 /usr/sbin/plymouth-set-default-theme || true
 echo "=================================================================="
