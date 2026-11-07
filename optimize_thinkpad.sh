@@ -112,6 +112,25 @@ echo Y > /sys/module/snd_hda_intel/parameters/power_save_controller 2>/dev/null 
 systemctl enable --now thermald.service || true
 systemctl enable --now power-profiles-daemon.service || true
 
+# Configure systemd suspend-then-hibernate (sleep immediately, hibernate after 120min on battery)
+mkdir -p /etc/systemd/sleep.conf.d
+cat << 'EOF' > /etc/systemd/sleep.conf.d/suspend-then-hibernate.conf
+[Sleep]
+AllowSuspend=yes
+AllowHibernation=yes
+AllowSuspendThenHibernate=yes
+HibernateDelaySec=120min
+EOF
+
+# Configure logind lid switch: suspend-then-hibernate on battery, suspend on AC power
+mkdir -p /etc/systemd/logind.conf.d
+cat << 'EOF' > /etc/systemd/logind.conf.d/lid.conf
+[Login]
+HandleLidSwitch=suspend-then-hibernate
+HandleLidSwitchExternalPower=suspend
+EOF
+systemctl kill --signal=SIGHUP systemd-logind.service 2>/dev/null || true
+
 # Configure ThinkPad battery charge thresholds (75% start / 90% end) to protect Li-ion longevity
 for bat in /sys/class/power_supply/BAT*; do
     if [ -f "$bat/charge_control_end_threshold" ]; then
@@ -212,14 +231,23 @@ else
     /usr/sbin/plymouth-set-default-theme ceratopsian || true
 fi
 
+# Dynamically detect swap partition UUID for reliable hibernation resume
+SWAP_UUID=$(blkid -t TYPE=swap -s UUID -o value 2>/dev/null | head -n 1 || true)
+RESUME_CMDLINE=""
+if [ -n "$SWAP_UUID" ]; then
+    RESUME_CMDLINE=" resume=UUID=${SWAP_UUID}"
+    mkdir -p /etc/initramfs-tools/conf.d
+    echo "RESUME=UUID=${SWAP_UUID}" > /etc/initramfs-tools/conf.d/resume
+fi
+
 cp -a /etc/default/grub "/etc/default/grub.bak.$(date +%Y%m%d%H%M%S)"
-cat << 'EOF' > /etc/default/grub
+cat << EOF > /etc/default/grub
 # GRUB configuration optimized for Lenovo ThinkPad 13 2nd Gen (i5-7200U / HD 620 1920x1080 / Intel NVMe)
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=2
 GRUB_TIMEOUT_STYLE=menu
-GRUB_DISTRIBUTOR=`( . /etc/os-release && echo ${NAME} )`
-GRUB_CMDLINE_LINUX_DEFAULT="quiet splash i915.enable_fbc=1 i915.fastboot=1 nmi_watchdog=0 nvme_core.default_ps_max_latency_us=5500 zswap.enabled=0"
+GRUB_DISTRIBUTOR=\`( . /etc/os-release && echo \${NAME} )\`
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash i915.enable_fbc=1 i915.fastboot=1 nmi_watchdog=0 nvme_core.default_ps_max_latency_us=5500 zswap.enabled=0${RESUME_CMDLINE}"
 GRUB_CMDLINE_LINUX=""
 GRUB_GFXMODE=1920x1080x32,1920x1080,auto
 GRUB_GFXPAYLOAD_LINUX=keep

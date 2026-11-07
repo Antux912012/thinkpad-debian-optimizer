@@ -22,6 +22,10 @@ An automated, idempotent system optimization and health check-up script for **De
   - Disables NMI watchdog interrupts (`kernel.nmi_watchdog = 0`).
   - Tunes `vm.swappiness = 100`, `vm.watermark_boost_factor = 0`, `vm.watermark_scale_factor = 125`, `vm.page-cluster = 0`, and `vm.vfs_cache_pressure = 50` specifically for 16 GB RAM + Zstd ZRAM laptops.
 - **ThinkPad Battery Charge Thresholds (`thinkpad-battery-threshold.service`):** Sets battery charge thresholds (`75%`–`90%`, lowering `start` before raising `end` to satisfy ThinkPad EC ordering constraints) to prevent high-voltage Li-ion wear.
+- **Suspend-then-Hibernate & Intelligent Lid Handling (`/etc/systemd/sleep.conf.d/` & `/etc/systemd/logind.conf.d/`):**
+  - Configures `suspend-then-hibernate` with a 120-minute delay (`HibernateDelaySec=120min`).
+  - On battery: closing the lid suspends immediately and automatically hibernates to disk after 2 hours (or on low battery) to prevent dead-battery surprises.
+  - On AC power: closing the lid performs instantaneous standard suspend.
 
 ### 3. NVMe / SSD Lifespan Protection
 - **`/etc/fstab` Mount Tuning:** Automatically adds `noatime,commit=60` to the root `ext4` filesystem and remounts `/` live, eliminating read-access timestamp writes and batching journal commits to 60s intervals.
@@ -41,7 +45,8 @@ An automated, idempotent system optimization and health check-up script for **De
 - Configures `/etc/default/grub` with:
   - `GRUB_TIMEOUT=2`
   - `GRUB_GFXMODE=1920x1080x32,1920x1080,auto` and `GRUB_GFXPAYLOAD_LINUX=keep` for native 1080p flicker-free handoff.
-  - `GRUB_CMDLINE_LINUX_DEFAULT="quiet splash i915.enable_fbc=1 i915.fastboot=1 nmi_watchdog=0 nvme_core.default_ps_max_latency_us=5500 zswap.enabled=0"`
+  - `GRUB_CMDLINE_LINUX_DEFAULT="quiet splash i915.enable_fbc=1 i915.fastboot=1 nmi_watchdog=0 nvme_core.default_ps_max_latency_us=5500 zswap.enabled=0 resume=UUID=<swap-uuid>"`
+  - Automatically detects the swap partition UUID via `blkid` and configures both `/etc/initramfs-tools/conf.d/resume` and GRUB for seamless hibernation resume.
 - Configures Plymouth boot splash theme (`bgrt` / `ceratopsian`) and updates initramfs (`update-initramfs -u -k all`) and GRUB (`update-grub`).
 
 ---
